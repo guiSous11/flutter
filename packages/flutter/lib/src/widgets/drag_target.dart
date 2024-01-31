@@ -18,7 +18,7 @@ import 'view.dart';
 /// Signature for determining whether the given data will be accepted by a [DragTarget].
 ///
 /// Used by [DragTarget.onWillAccept].
-typedef DragTargetWillAccept<T> = bool Function(T? data);
+typedef DragTargetWillAccept<T> = Future<bool> Function(T? data);
 
 /// Signature for determining whether the given data will be accepted by a [DragTarget],
 /// based on provided information.
@@ -611,18 +611,8 @@ class DragTarget<T extends Object> extends StatefulWidget {
   const DragTarget({
     super.key,
     required this.builder,
-    @Deprecated(
-      'Use onWillAcceptWithDetails instead. '
-      'This callback is similar to onWillAcceptWithDetails but does not provide drag details. '
-      'This feature was deprecated after v3.14.0-0.2.pre.'
-    )
     this.onWillAccept,
     this.onWillAcceptWithDetails,
-    @Deprecated(
-      'Use onAcceptWithDetails instead. '
-      'This callback is similar to onAcceptWithDetails but does not provide drag details. '
-      'This feature was deprecated after v3.14.0-0.2.pre.'
-    )
     this.onAccept,
     this.onAcceptWithDetails,
     this.onLeave,
@@ -646,11 +636,6 @@ class DragTarget<T extends Object> extends StatefulWidget {
   /// Equivalent to [onWillAcceptWithDetails], but only includes the data.
   ///
   /// Must not be provided if [onWillAcceptWithDetails] is provided.
-  @Deprecated(
-    'Use onWillAcceptWithDetails instead. '
-    'This callback is similar to onWillAcceptWithDetails but does not provide drag details. '
-    'This feature was deprecated after v3.14.0-0.2.pre.'
-  )
   final DragTargetWillAccept<T>? onWillAccept;
 
   /// Called to determine whether this widget is interested in receiving a given
@@ -667,18 +652,11 @@ class DragTarget<T extends Object> extends StatefulWidget {
   final DragTargetWillAcceptWithDetails<T>? onWillAcceptWithDetails;
 
   /// Called when an acceptable piece of data was dropped over this drag target.
-  /// It will not be called if `data` is `null`.
   ///
   /// Equivalent to [onAcceptWithDetails], but only includes the data.
-  @Deprecated(
-    'Use onAcceptWithDetails instead. '
-    'This callback is similar to onAcceptWithDetails but does not provide drag details. '
-    'This feature was deprecated after v3.14.0-0.2.pre.'
-  )
   final DragTargetAccept<T>? onAccept;
 
   /// Called when an acceptable piece of data was dropped over this drag target.
-  /// It will not be called if `data` is `null`.
   ///
   /// Equivalent to [onAccept], but with information, including the data, in a
   /// [DragTargetDetails].
@@ -688,8 +666,7 @@ class DragTarget<T extends Object> extends StatefulWidget {
   /// the target.
   final DragTargetLeave<T>? onLeave;
 
-  /// Called when a [Draggable] moves within this [DragTarget]. It will not be
-  /// called if `data` is `null`.
+  /// Called when a [Draggable] moves within this [DragTarget].
   ///
   /// This includes entering and leaving the target.
   final DragTargetMove<T>? onMove;
@@ -722,15 +699,14 @@ class _DragTargetState<T extends Object> extends State<DragTarget<T>> {
     return data is T?;
   }
 
-  bool didEnter(_DragAvatar<Object> avatar) {
+  Future<bool> didEnter(_DragAvatar<Object> avatar) async {
     assert(!_candidateAvatars.contains(avatar));
     assert(!_rejectedAvatars.contains(avatar));
     final bool resolvedWillAccept = (widget.onWillAccept == null &&
                                     widget.onWillAcceptWithDetails == null) ||
                                     (widget.onWillAccept != null &&
-                                    widget.onWillAccept!(avatar.data as T?)) ||
+                                    await widget.onWillAccept!(avatar.data as T?)) ||
                                     (widget.onWillAcceptWithDetails != null &&
-                                    avatar.data != null &&
                                     widget.onWillAcceptWithDetails!(DragTargetDetails<T>(data: avatar.data! as T, offset: avatar._lastOffset!)));
     if (resolvedWillAccept) {
       setState(() {
@@ -765,14 +741,12 @@ class _DragTargetState<T extends Object> extends State<DragTarget<T>> {
     setState(() {
       _candidateAvatars.remove(avatar);
     });
-    if (avatar.data != null)  {
-      widget.onAccept?.call(avatar.data! as T);
-      widget.onAcceptWithDetails?.call(DragTargetDetails<T>(data: avatar.data! as T, offset: avatar._lastOffset!));
-    }
+    widget.onAccept?.call(avatar.data! as T);
+    widget.onAcceptWithDetails?.call(DragTargetDetails<T>(data: avatar.data! as T, offset: avatar._lastOffset!));
   }
 
   void didMove(_DragAvatar<Object> avatar) {
-    if (!mounted || avatar.data == null) {
+    if (!mounted) {
       return;
     }
     widget.onMove?.call(DragTargetDetails<T>(data: avatar.data! as T, offset: avatar._lastOffset!));
@@ -834,10 +808,10 @@ class _DragAvatar<T extends Object> extends Drag {
   OverlayEntry? _entry;
 
   @override
-  void update(DragUpdateDetails details) {
+  void update(DragUpdateDetails details) async {
     final Offset oldPosition = _position;
     _position += _restrictAxis(details.delta);
-    updateDrag(_position);
+    await updateDrag(_position);
     if (onDragUpdate != null && _position != oldPosition) {
       onDragUpdate!(details);
     }
@@ -854,7 +828,7 @@ class _DragAvatar<T extends Object> extends Drag {
     finishDrag(_DragEndKind.canceled);
   }
 
-  void updateDrag(Offset globalPosition) {
+  Future<void> updateDrag(Offset globalPosition) async {
     _lastOffset = globalPosition - dragStartPoint;
     _entry!.markNeedsBuild();
     final HitTestResult result = HitTestResult();
@@ -887,16 +861,19 @@ class _DragAvatar<T extends Object> extends Drag {
     _leaveAllEntered();
 
     // Enter new targets.
-    final _DragTargetState<Object>? newTarget = targets.cast<_DragTargetState<Object>?>().firstWhere(
-      (_DragTargetState<Object>? target) {
-        if (target == null) {
-          return false;
-        }
-        _enteredTargets.add(target);
-        return target.didEnter(this);
-      },
-      orElse: () => null,
-    );
+    var _DragTargetState<Object>? newTarget;
+
+      for (var e in targets.cast<_DragTargetState<Object>?>()) {
+            if (e == null) {
+                  continue;
+            }
+
+             _enteredTargets.add(e);
+             
+          if (await e.didEnter(this)) {
+            newTarget = e;
+          }
+  }
 
     // Report moves to the targets.
     for (final _DragTargetState<Object> target in _enteredTargets) {
